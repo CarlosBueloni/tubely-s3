@@ -42,13 +42,18 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	// TODO: implement the upload here
 	const maxMemory = 10 << 20
-	r.ParseMultipartForm(maxMemory)
+	err = r.ParseMultipartForm(maxMemory)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "File is too large", err)
+	}
 
 	fileData, header, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "File error", err)
 		return
 	}
+
+	defer fileData.Close()
 
 	contentType := header.Header.Get("Content-Type")
 	mediaType, _, _ := mime.ParseMediaType(contentType)
@@ -63,7 +68,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if userID != video.UserID {
-		respondWithError(w, http.StatusUnauthorized, "Unathorized access, video does not belong to user", err)
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized access, video does not belong to user", err)
 		return
 	}
 
