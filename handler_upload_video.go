@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -63,7 +67,6 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	contentType := header.Header.Get("Content-Type")
 	mediaType, _, _ := mime.ParseMediaType(contentType)
-	fmt.Printf("mediatype %v", mediaType)
 	if mediaType != "video/mp4" {
 		respondWithError(w, http.StatusUnsupportedMediaType, "Unsupported media type", err)
 		return
@@ -87,7 +90,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	k := make([]byte, 32)
 	rand.Read(k)
 	randString := base64.URLEncoding.EncodeToString(k)
-	fileKey := randString + ".mp4"
+	aspectRatio, err := getVideoAspectRatio(temp.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting aspect ratio", err)
+		return
+	}
+	fileKey := aspectRatio + "/" + randString + ".mp4"
 	params := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &fileKey,
@@ -104,4 +112,37 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	videoURL := fmt.Sprintf("https://%v.s3.%v.amazonaws.com/%v", cfg.s3Bucket, cfg.s3Region, fileKey)
 	video.VideoURL = &videoURL
 	cfg.db.UpdateVideo(video)
+}
+
+func getVideoAspectRatio(filepath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filepath)
+	var buffer bytes.Buffer
+	cmd.Stdout = &buffer
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	var dimensions struct {
+		Streams []struct {
+			Width, Height int
+		} `json:"streams"`
+	}
+	err = json.Unmarshal(buffer.Bytes(), &dimensions)
+	if err != nil {
+		return "", err
+	}
+
+	if isWithinTolerance(float64(dimensions.Streams[0].Width)/float64(dimensions.Streams[0].Height), 1.77, 0.2) {
+		return "landscape", nil
+	}
+
+	if isWithinTolerance(float64(dimensions.Streams[0].Width)/float64(dimensions.Streams[0].Height), 0.55, 0.2) {
+		return "portrait", nil
+	}
+
+	return "other", nil
+}
+
+func isWithinTolerance(value, target, tolerance float64) bool {
+	return math.Abs(value-target) <= tolerance
 }
